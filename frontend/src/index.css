@@ -17,6 +17,8 @@
         color: #f3e8d3;
         border: 1px solid #2e1d0c;
         border-bottom: 2px solid #5c3a18;
+        line-height: normal;
+        /* FIX: Evita que o texto digitado seja cortado */
     }
 
     .input-fantasy:focus {
@@ -54,6 +56,8 @@
     .obsidian-card {
         @apply bg-[#100d0a]/80 rounded-lg border border-[#36291d] relative backdrop-blur-md overflow-hidden;
         box-shadow: 0 30px 80px rgba(0, 0, 0, 0.95), inset 0 2px 2px rgba(255, 255, 255, 0.02);
+        isolation: isolate;
+        /* FIX: Força nova camada e impede que textos ou forms sumam */
     }
 
     /* Ornamento Interno do Card */
@@ -68,7 +72,8 @@
 
 /* Grão Cinematográfico */
 .grain-overlay {
-    position: absolute;
+    position: fixed;
+    /* Trocado para fixed para cobrir toda a tela */
     inset: 0;
     pointer-events: none;
     z-index: 50;
@@ -104,6 +109,10 @@
 /* Ouro Brilhante no Texto */
 .text-gold-gradient {
     @apply bg-gradient-to-b from-[#fff2cc] via-[#d4af37] to-[#8a631c] bg-clip-text text-transparent;
+    line-height: 1.4;
+    /* FIX: Espaço para o topo das letras */
+    padding-bottom: 4px;
+    /* FIX: Espaço para a base das letras */
 }
 
 /* Tocha / Forja Background */
@@ -131,4 +140,151 @@
     animation: forgePulse 8s infinite alternate ease-in-out;
     pointer-events: none;
     z-index: 0;
+}
+
+/* --- DESIGN SYSTEM DO RPG (Dashboard) --- */
+:root {
+    --bg: #050403;
+    --panel: rgba(12, 9, 7, .80);
+    --panel2: rgba(16, 13, 10, .72);
+    --stroke: rgba(54, 41, 29, .85);
+    --gold: #d4af37;
+    --gold3: #8a631c;
+    --shadow: 0 30px 90px rgba(0, 0, 0, .92);
+}
+
+@keyframes float-slow {
+    0% {
+        transform: translate(0, 0) rotate(0deg) scale(1);
+        opacity: .12;
+    }
+
+    50% {
+        transform: translate(40px, -40px) rotate(180deg) scale(1.08);
+        opacity: .22;
+    }
+
+    100% {
+        transform: translate(-20px, 20px) rotate(360deg) scale(1);
+        opacity: .12;
+    }
+}
+
+@keyframes emberRise {
+    0% {
+        transform: translateY(110vh) translateX(0) scale(1);
+        opacity: 0;
+    }
+
+    15% {
+        opacity: .85;
+    }
+
+    70% {
+        opacity: .35;
+    }
+
+    100% {
+        transform: translateY(-10vh) translateX(40px) scale(.35);
+        opacity: 0;
+    }
+}
+
+@keyframes spinSlow {
+    100% {
+        transform: translate(-50%, -50%) rotate(360deg);
+    }
+}
+
+@keyframes spinSlowReverse {
+    100% {
+        transform: translate(-50%, -50%) rotate(-360deg);
+    }
+}
+
+@keyframes floatUpFade {
+    0% {
+        transform: translateY(0) scale(1);
+        opacity: 1;
+    }
+
+    100% {
+        transform: translateY(-42px) scale(1.1);
+        opacity: 0;
+    }
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+    display: none;
+}
+
+.hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+}
+
+.rune-ring {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    pointer-events: none;
+    z-index: 0;
+}
+
+.card {
+    background: var(--panel);
+    border: 1px solid var(--stroke);
+    border-radius: 16px;
+    box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, .04);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+}
+
+.card-soft {
+    background: var(--panel2);
+    border: 1px solid var(--stroke);
+    border-radius: 16px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, .70), inset 0 1px 0 rgba(255, 255, 255, .03);
+    backdrop-filter: blur(12px);
+}
+
+.metal-edge {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: linear-gradient(90deg, #1c1611, #8f724e, #1c1611);
+    background-size: 200% 100%;
+    animation: metalSheen 6s infinite ease-in-out;
+    opacity: .9;
+}
+
+.btn-press {
+    transition: transform .15s ease, box-shadow .2s ease, border-color .2s ease, background .2s ease;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, .65), inset 0 1px 0 rgba(255, 255, 255, .04);
+}
+
+.btn-press:hover {
+    transform: translateY(-1px);
+}
+
+.btn-press:active {
+    transform: translateY(2px);
+    box-shadow: 0 6px 14px rgba(0, 0, 0, .65), inset 0 1px 0 rgba(255, 255, 255, .04);
+}
+
+.pill {
+    border: 1px solid rgba(143, 114, 78, .55);
+    background: rgba(16, 13, 10, .70);
+    border-radius: 999px;
+}
+
+.title-gold {
+    background: linear-gradient(90deg, #fff2cc, var(--gold), var(--gold3));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
 }
