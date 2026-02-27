@@ -1,10 +1,10 @@
-// FILE: frontend/src/App.jsx
-import React from 'react'; // <-- ADICIONE ESTA LINHA
+import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
+import { Register } from './pages/Register'; // <-- IMPORTADO AQUI
 import { Dashboard } from './pages/Dashboard';
 import { Transfer } from './pages/Transfer';
 import { Statement } from './pages/Statement';
@@ -16,6 +16,7 @@ export default function App() {
             <BrowserRouter>
                 <Routes>
                     <Route path="/login" element={<Login />} />
+                    <Route path="/register" element={<Register />} /> {/* <-- ADICIONADO AQUI */}
                     <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
                         <Route index element={<Navigate to="/dashboard" replace />} />
                         <Route path="dashboard" element={<Dashboard />} />

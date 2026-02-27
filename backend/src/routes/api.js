@@ -1,22 +1,70 @@
 import express from 'express';
 import pool from '../config/db.js';
-import bcrypt from 'bcrypt';
 import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { requireAuth } from '../middlewares/auth.js';
 import { authLimiter } from '../middlewares/rateLimiter.js';
-import { loginSchema, transferSchema, passwordSchema, generateAccessToken, generateRefreshToken, hashPassword, verifyPassword } from '../utils/security.js';
+// ATENÇÃO: registerSchema adicionado aqui na importação
+import {
+    loginSchema,
+    registerSchema,
+    transferSchema,
+    passwordSchema,
+    generateAccessToken,
+    generateRefreshToken,
+    hashPassword,
+    verifyPassword
+} from '../utils/security.js';
 
 const router = express.Router();
 
 // --- AUTH ENDPOINTS ---
+
+// NOVO: Rota de Registro
+router.post('/auth/register', authLimiter, async (req, res) => {
+    const conn = await pool.getConnection();
+    try {
+        const { name, email, password } = registerSchema.parse(req.body);
+
+        // Verifica se o email já existe
+        const [existing] = await conn.query('SELECT id FROM users WHERE email = ?', [email]);
+        if (existing.length > 0) {
+            return res.status(400).json({ error: 'Este e-mail já está em uso' });
+        }
+
+        const hashed = await hashPassword(password);
+
+        await conn.beginTransaction();
+
+        // 1. Cria o usuário
+        const [userResult] = await conn.query(
+            'INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)',
+            [name, email, hashed]
+        );
+
+        // 2. Cria a conta bancária para o usuário com saldo inicial de R$ 500,00 (50000 cents)
+        await conn.query(
+            'INSERT INTO accounts (user_id, balance_cents) VALUES (?, ?)',
+            [userResult.insertId, 50000]
+        );
+
+        await conn.commit();
+        res.status(201).json({ message: 'Conta criada com sucesso! Faça login para continuar.' });
+    } catch (e) {
+        await conn.rollback();
+        if (e.errors) return res.status(400).json({ error: e.errors });
+        res.status(500).json({ error: 'Erro ao criar conta' });
+    } finally {
+        conn.release();
+    }
+});
+
 router.post('/auth/login', authLimiter, async (req, res) => {
     try {
         const { email, password } = loginSchema.parse(req.body);
         const [users] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
         const user = users[0];
 
-        // Mensagem genérica para proteção contra enumeração de usuários
         if (!user || !(await verifyPassword(password, user.password_hash))) {
             return res.status(401).json({ error: 'Credenciais inválidas' });
         }
@@ -24,7 +72,6 @@ router.post('/auth/login', authLimiter, async (req, res) => {
         const accessToken = generateAccessToken(user.id);
         const refreshToken = generateRefreshToken(user.id);
 
-        // Armazenar hash do refresh token no banco (Token rotation/revocation support)
         const refreshHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
         const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 dias
         await pool.query('INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)', [user.id, refreshHash, expiresAt]);
@@ -50,11 +97,9 @@ router.post('/auth/refresh', authLimiter, async (req, res) => {
         const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
         const refreshHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
 
-        // Verificar se o token existe e não foi revogado
         const [tokens] = await pool.query('SELECT * FROM refresh_tokens WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > NOW()', [refreshHash]);
         if (tokens.length === 0) throw new Error('Token revogado ou inválido');
 
-        // Rotacionar token
         await pool.query('UPDATE refresh_tokens SET revoked_at = NOW() WHERE id = ?', [tokens[0].id]);
 
         const newAccessToken = generateAccessToken(decoded.userId);
@@ -105,7 +150,6 @@ router.post('/me/change-password', requireAuth, async (req, res) => {
         const newHash = await hashPassword(newPassword);
         await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, req.user.id]);
 
-        // Revogar todos os refresh tokens ativos por segurança
         await pool.query('UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = ?', [req.user.id]);
         res.clearCookie('refreshToken');
         res.json({ message: 'Senha alterada. Por favor, faça login novamente.' });
@@ -132,29 +176,36 @@ router.get('/transactions', requireAuth, async (req, res) => {
     res.json({ data: transactions, page, limit });
 });
 
+// ATUALIZADO: Rota de Transferência (agora usando toEmail)
 router.post('/transfers', requireAuth, async (req, res) => {
     const conn = await pool.getConnection();
     try {
-        const { toAccountId, amountCents, description } = transferSchema.parse(req.body);
+        const { toEmail, amountCents, description } = transferSchema.parse(req.body);
+
+        // Busca a conta de destino pelo e-mail
+        const [destUsers] = await conn.query(
+            'SELECT a.id as account_id FROM users u JOIN accounts a ON u.id = a.user_id WHERE u.email = ?',
+            [toEmail]
+        );
+
+        if (destUsers.length === 0) {
+            return res.status(404).json({ error: 'Nenhuma conta encontrada com este e-mail' });
+        }
+
+        const toAccountId = destUsers[0].account_id;
 
         const [myAccounts] = await conn.query('SELECT id FROM accounts WHERE user_id = ?', [req.user.id]);
         const fromAccountId = myAccounts[0].id;
 
         if (fromAccountId === toAccountId) {
-            return res.status(400).json({ error: 'Não é possível transferir para a mesma conta' });
+            return res.status(400).json({ error: 'Não é possível transferir para a própria conta' });
         }
 
         await conn.beginTransaction();
 
-        // Lock das linhas envolvidas (Garante atomicidade e previne race conditions)
-        // Ordenamos os IDs para evitar Deadlocks se duas contas transferirem entre si ao mesmo tempo
+        // Lock das linhas envolvidas
         const ids = [fromAccountId, toAccountId].sort();
         const [lockedAccounts] = await conn.query('SELECT id, balance_cents FROM accounts WHERE id IN (?, ?) FOR UPDATE', ids);
-
-        if (lockedAccounts.length !== 2) {
-            await conn.rollback();
-            return res.status(404).json({ error: 'Conta de destino não encontrada' });
-        }
 
         const fromAccount = lockedAccounts.find(a => a.id === fromAccountId);
         const toAccount = lockedAccounts.find(a => a.id === toAccountId);
@@ -164,7 +215,6 @@ router.post('/transfers', requireAuth, async (req, res) => {
             return res.status(400).json({ error: 'Saldo insuficiente' });
         }
 
-        // Validação de limite diário (R$ 5.000,00)
         const [dailyTotal] = await conn.query(
             `SELECT COALESCE(SUM(amount_cents), 0) as total FROM transactions 
              WHERE from_account_id = ? AND DATE(created_at) = CURDATE()`, [fromAccountId]
@@ -175,11 +225,9 @@ router.post('/transfers', requireAuth, async (req, res) => {
             return res.status(400).json({ error: 'Limite diário de transferências excedido (R$ 5.000,00)' });
         }
 
-        // Atualizar saldos
         await conn.query('UPDATE accounts SET balance_cents = balance_cents - ? WHERE id = ?', [amountCents, fromAccountId]);
         await conn.query('UPDATE accounts SET balance_cents = balance_cents + ? WHERE id = ?', [amountCents, toAccountId]);
 
-        // Registrar transação
         await conn.query(
             'INSERT INTO transactions (from_account_id, to_account_id, amount_cents, description, type) VALUES (?, ?, ?, ?, ?)',
             [fromAccountId, toAccountId, amountCents, description || '', 'TRANSFER']
