@@ -233,6 +233,62 @@ router.post('/transfers', requireAuth, async (req, res) => {
             [fromAccountId, toAccountId, amountCents, description || '', 'TRANSFER']
         );
 
+
+        router.post('/accounts/tribute', requireAuth, async (req, res) => {
+            const conn = await pool.getConnection();
+            try {
+                // 1. Descobre a conta do usuário
+                const [accounts] = await conn.query('SELECT id, balance_cents FROM accounts WHERE user_id = ?', [req.user.id]);
+                if (accounts.length === 0) return res.status(404).json({ error: 'Conta não encontrada' });
+
+                const accountId = accounts[0].id;
+
+                // 2. Anti-spam: Verifica se o usuário já coletou tributos nos últimos 10 segundos
+                const [lastTx] = await conn.query(
+                    `SELECT created_at FROM transactions 
+             WHERE to_account_id = ? AND type = 'DEPOSIT' AND description = 'Tributos da Taverna' 
+             ORDER BY created_at DESC LIMIT 1`, [accountId]
+                );
+
+                if (lastTx.length > 0) {
+                    const timeDiff = Date.now() - new Date(lastTx[0].created_at).getTime();
+                    if (timeDiff < 10000) { // 10000 ms = 10 segundos
+                        return res.status(429).json({ error: 'Você está exausto. Descanse um pouco antes de trabalhar novamente!' });
+                    }
+                }
+
+                // 3. Gera um ganho aleatório entre R$ 5,00 (500 centavos) e R$ 15,00 (1500 centavos)
+                const amountCents = Math.floor(Math.random() * (1500 - 500 + 1) + 500);
+
+                await conn.beginTransaction();
+
+                // 4. Adiciona o saldo na conta do usuário
+                await conn.query('UPDATE accounts SET balance_cents = balance_cents + ? WHERE id = ?', [amountCents, accountId]);
+
+                // 5. Registra o ganho no histórico (from_account_id fica NULL porque o dinheiro veio do "sistema")
+                await conn.query(
+                    'INSERT INTO transactions (from_account_id, to_account_id, amount_cents, description, type) VALUES (NULL, ?, ?, ?, ?)',
+                    [accountId, amountCents, 'Tributos da Taverna', 'DEPOSIT']
+                );
+
+                await conn.commit();
+                res.json({
+                    message: 'Tributos coletados com sucesso!',
+                    earned_cents: amountCents,
+                    new_balance: accounts[0].balance_cents + amountCents
+                });
+            } catch (e) {
+                await conn.rollback();
+                res.status(500).json({ error: 'Erro ao coletar tributos' });
+            } finally {
+                conn.release();
+            }
+        });
+
+
+
+
+
         await conn.commit();
         res.json({ message: 'Transferência realizada com sucesso' });
     } catch (e) {
