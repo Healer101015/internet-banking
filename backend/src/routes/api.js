@@ -4,7 +4,6 @@ import crypto from 'crypto';
 import jwt from 'jsonwebtoken';
 import { requireAuth } from '../middlewares/auth.js';
 import { authLimiter } from '../middlewares/rateLimiter.js';
-// ATENÇÃO: registerSchema adicionado aqui na importação
 import {
     loginSchema,
     registerSchema,
@@ -18,15 +17,15 @@ import {
 
 const router = express.Router();
 
-// --- AUTH ENDPOINTS ---
+// ==========================================
+// --- ENDPOINTS DE AUTENTICAÇÃO ---
+// ==========================================
 
-// NOVO: Rota de Registro
 router.post('/auth/register', authLimiter, async (req, res) => {
     const conn = await pool.getConnection();
     try {
         const { name, email, password } = registerSchema.parse(req.body);
 
-        // Verifica se o email já existe
         const [existing] = await conn.query('SELECT id FROM users WHERE email = ?', [email]);
         if (existing.length > 0) {
             return res.status(400).json({ error: 'Este e-mail já está em uso' });
@@ -36,16 +35,22 @@ router.post('/auth/register', authLimiter, async (req, res) => {
 
         await conn.beginTransaction();
 
-        // 1. Cria o usuário
+        // 1. Cria o utilizador
         const [userResult] = await conn.query(
             'INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)',
             [name, email, hashed]
         );
 
-        // 2. Cria a conta bancária para o usuário com saldo inicial de R$ 500,00 (50000 cents)
+        // 2. Cria a conta bancária com saldo inicial de R$ 500,00 (50000 cents)
         await conn.query(
             'INSERT INTO accounts (user_id, balance_cents) VALUES (?, ?)',
             [userResult.insertId, 50000]
+        );
+
+        // 3. Envia o Corvo de Boas-vindas
+        await conn.query(
+            'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+            [userResult.insertId, 'Pacto Selado!', 'Bem-vindo ao Reino. O seu cofre recebeu 500 moedas de ouro iniciais.', 'SYSTEM']
         );
 
         await conn.commit();
@@ -73,7 +78,7 @@ router.post('/auth/login', authLimiter, async (req, res) => {
         const refreshToken = generateRefreshToken(user.id);
 
         const refreshHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
-        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 dias
+        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
         await pool.query('INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES (?, ?, ?)', [user.id, refreshHash, expiresAt]);
 
         res.cookie('refreshToken', refreshToken, {
@@ -127,7 +132,10 @@ router.post('/auth/logout', async (req, res) => {
     res.json({ message: 'Logout realizado com sucesso' });
 });
 
-// --- USER & ACCOUNTS ENDPOINTS ---
+// ==========================================
+// --- ENDPOINTS DE UTILIZADOR E CONTAS ---
+// ==========================================
+
 router.get('/me', requireAuth, async (req, res) => {
     const [users] = await pool.query('SELECT id, name, email FROM users WHERE id = ?', [req.user.id]);
     res.json(users[0]);
@@ -158,7 +166,10 @@ router.post('/me/change-password', requireAuth, async (req, res) => {
     }
 });
 
-// --- TRANSACTIONS & TRANSFERS ENDPOINTS ---
+// ==========================================
+// --- TRANSAÇÕES E TRANSFERÊNCIAS ---
+// ==========================================
+
 router.get('/transactions', requireAuth, async (req, res) => {
     const [accounts] = await pool.query('SELECT id FROM accounts WHERE user_id = ?', [req.user.id]);
     const accountId = accounts[0].id;
@@ -176,15 +187,13 @@ router.get('/transactions', requireAuth, async (req, res) => {
     res.json({ data: transactions, page, limit });
 });
 
-// ATUALIZADO: Rota de Transferência (agora usando toEmail)
 router.post('/transfers', requireAuth, async (req, res) => {
     const conn = await pool.getConnection();
     try {
         const { toEmail, amountCents, description } = transferSchema.parse(req.body);
 
-        // Busca a conta de destino pelo e-mail
         const [destUsers] = await conn.query(
-            'SELECT a.id as account_id FROM users u JOIN accounts a ON u.id = a.user_id WHERE u.email = ?',
+            'SELECT a.id as account_id, u.id as user_id FROM users u JOIN accounts a ON u.id = a.user_id WHERE u.email = ?',
             [toEmail]
         );
 
@@ -193,6 +202,7 @@ router.post('/transfers', requireAuth, async (req, res) => {
         }
 
         const toAccountId = destUsers[0].account_id;
+        const recipientUserId = destUsers[0].user_id;
 
         const [myAccounts] = await conn.query('SELECT id FROM accounts WHERE user_id = ?', [req.user.id]);
         const fromAccountId = myAccounts[0].id;
@@ -203,7 +213,6 @@ router.post('/transfers', requireAuth, async (req, res) => {
 
         await conn.beginTransaction();
 
-        // Lock das linhas envolvidas
         const ids = [fromAccountId, toAccountId].sort();
         const [lockedAccounts] = await conn.query('SELECT id, balance_cents FROM accounts WHERE id IN (?, ?) FOR UPDATE', ids);
 
@@ -233,61 +242,12 @@ router.post('/transfers', requireAuth, async (req, res) => {
             [fromAccountId, toAccountId, amountCents, description || '', 'TRANSFER']
         );
 
-
-        router.post('/accounts/tribute', requireAuth, async (req, res) => {
-            const conn = await pool.getConnection();
-            try {
-                // 1. Descobre a conta do usuário
-                const [accounts] = await conn.query('SELECT id, balance_cents FROM accounts WHERE user_id = ?', [req.user.id]);
-                if (accounts.length === 0) return res.status(404).json({ error: 'Conta não encontrada' });
-
-                const accountId = accounts[0].id;
-
-                // 2. Anti-spam: Verifica se o usuário já coletou tributos nos últimos 10 segundos
-                const [lastTx] = await conn.query(
-                    `SELECT created_at FROM transactions 
-             WHERE to_account_id = ? AND type = 'DEPOSIT' AND description = 'Tributos da Taverna' 
-             ORDER BY created_at DESC LIMIT 1`, [accountId]
-                );
-
-                if (lastTx.length > 0) {
-                    const timeDiff = Date.now() - new Date(lastTx[0].created_at).getTime();
-                    if (timeDiff < 10000) { // 10000 ms = 10 segundos
-                        return res.status(429).json({ error: 'Você está exausto. Descanse um pouco antes de trabalhar novamente!' });
-                    }
-                }
-
-                // 3. Gera um ganho aleatório entre R$ 5,00 (500 centavos) e R$ 15,00 (1500 centavos)
-                const amountCents = Math.floor(Math.random() * (1500 - 500 + 1) + 500);
-
-                await conn.beginTransaction();
-
-                // 4. Adiciona o saldo na conta do usuário
-                await conn.query('UPDATE accounts SET balance_cents = balance_cents + ? WHERE id = ?', [amountCents, accountId]);
-
-                // 5. Registra o ganho no histórico (from_account_id fica NULL porque o dinheiro veio do "sistema")
-                await conn.query(
-                    'INSERT INTO transactions (from_account_id, to_account_id, amount_cents, description, type) VALUES (NULL, ?, ?, ?, ?)',
-                    [accountId, amountCents, 'Tributos da Taverna', 'DEPOSIT']
-                );
-
-                await conn.commit();
-                res.json({
-                    message: 'Tributos coletados com sucesso!',
-                    earned_cents: amountCents,
-                    new_balance: accounts[0].balance_cents + amountCents
-                });
-            } catch (e) {
-                await conn.rollback();
-                res.status(500).json({ error: 'Erro ao coletar tributos' });
-            } finally {
-                conn.release();
-            }
-        });
-
-
-
-
+        // --- SISTEMA DE CORVOS: Envia notificação ao recebedor ---
+        const valorFormatado = new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(amountCents / 100);
+        await conn.query(
+            'INSERT INTO notifications (user_id, title, message, type) VALUES (?, ?, ?, ?)',
+            [recipientUserId, 'Ouro Recebido!', `Você recebeu ${valorFormatado} de um aliado.`, 'TRANSFER_IN']
+        );
 
         await conn.commit();
         res.json({ message: 'Transferência realizada com sucesso' });
@@ -297,6 +257,127 @@ router.post('/transfers', requireAuth, async (req, res) => {
         res.status(500).json({ error: 'Erro interno ao processar transferência' });
     } finally {
         conn.release();
+    }
+});
+
+// ==========================================
+// --- SISTEMAS DE RPG E TAVERNA ---
+// ==========================================
+
+router.post('/accounts/tribute', requireAuth, async (req, res) => {
+    const conn = await pool.getConnection();
+    try {
+        const [accounts] = await conn.query('SELECT id, balance_cents FROM accounts WHERE user_id = ?', [req.user.id]);
+        if (accounts.length === 0) return res.status(404).json({ error: 'Conta não encontrada' });
+
+        const accountId = accounts[0].id;
+
+        const [lastTx] = await conn.query(
+            `SELECT created_at FROM transactions 
+             WHERE to_account_id = ? AND type = 'DEPOSIT' AND description = 'Tributos da Taverna' 
+             ORDER BY created_at DESC LIMIT 1`, [accountId]
+        );
+
+        if (lastTx.length > 0) {
+            const timeDiff = Date.now() - new Date(lastTx[0].created_at).getTime();
+            const cooldown = 30 * 60 * 1000; // 30 Minutos
+
+            if (timeDiff < cooldown) {
+                const remainingMinutes = Math.ceil((cooldown - timeDiff) / 60000);
+                return res.status(429).json({
+                    error: `A taverna está sem tarefas. Volte em ${remainingMinutes} minutos.`
+                });
+            }
+        }
+
+        const amountCents = Math.floor(Math.random() * (1500 - 500 + 1) + 500);
+
+        await conn.beginTransaction();
+
+        await conn.query('UPDATE accounts SET balance_cents = balance_cents + ? WHERE id = ?', [amountCents, accountId]);
+
+        await conn.query(
+            'INSERT INTO transactions (from_account_id, to_account_id, amount_cents, description, type) VALUES (NULL, ?, ?, ?, ?)',
+            [accountId, amountCents, 'Tributos da Taverna', 'DEPOSIT']
+        );
+
+        await conn.commit();
+        res.json({ message: 'Tributos coletados!', earned_cents: amountCents, new_balance: accounts[0].balance_cents + amountCents });
+    } catch (e) {
+        await conn.rollback();
+        res.status(500).json({ error: 'Erro ao coletar tributos' });
+    } finally {
+        conn.release();
+    }
+});
+
+router.get('/dashboard/rpg-data', requireAuth, async (req, res) => {
+    try {
+        const [accounts] = await pool.query('SELECT id FROM accounts WHERE user_id = ?', [req.user.id]);
+        const accountId = accounts[0].id;
+
+        let [lair] = await pool.query('SELECT balance_cents FROM investments WHERE account_id = ?', [accountId]);
+        if (lair.length === 0) {
+            await pool.query('INSERT INTO investments (account_id) VALUES (?)', [accountId]);
+            lair = [{ balance_cents: 0 }];
+        }
+
+        const [missions] = await pool.query('SELECT * FROM missions WHERE account_id = ?', [accountId]);
+
+        const [guild] = await pool.query(
+            `SELECT c.id, u.name, u.email, c.nickname 
+             FROM contacts c 
+             JOIN users u ON c.contact_user_id = u.id 
+             WHERE c.user_id = ?`, [req.user.id]
+        );
+
+        res.json({
+            lairBalance: lair[0].balance_cents,
+            missions: missions,
+            guild: guild
+        });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao carregar dados do reino' });
+    }
+});
+
+// ==========================================
+// --- CORVOS MENSAGEIROS (NOTIFICAÇÕES) ---
+// ==========================================
+
+router.get('/notifications', requireAuth, async (req, res) => {
+    try {
+        const [notifs] = await pool.query(
+            'SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 15',
+            [req.user.id]
+        );
+        res.json(notifs);
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao chamar os corvos.' });
+    }
+});
+
+router.put('/notifications/:id/read', requireAuth, async (req, res) => {
+    try {
+        await pool.query(
+            'UPDATE notifications SET is_read = TRUE WHERE id = ? AND user_id = ?',
+            [req.params.id, req.user.id]
+        );
+        res.json({ message: 'Mensagem lida.' });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao dispensar o corvo.' });
+    }
+});
+
+router.put('/notifications/read-all', requireAuth, async (req, res) => {
+    try {
+        await pool.query(
+            'UPDATE notifications SET is_read = TRUE WHERE user_id = ?',
+            [req.user.id]
+        );
+        res.json({ message: 'Todos os corvos foram dispensados.' });
+    } catch (error) {
+        res.status(500).json({ error: 'Erro ao limpar notificações.' });
     }
 });
 

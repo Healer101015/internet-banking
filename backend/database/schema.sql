@@ -39,6 +39,61 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+-- 1. A Guilda (Contatos Salvos)
+CREATE TABLE IF NOT EXISTS contacts (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    contact_user_id INT NOT NULL,
+    nickname VARCHAR(50),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (contact_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- 2. Covil do Dragão (Poupança/Investimentos)
+CREATE TABLE IF NOT EXISTS investments (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    account_id INT NOT NULL UNIQUE,
+    balance_cents BIGINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+-- 3. Missões Reais (Metas do Usuário)
+CREATE TABLE IF NOT EXISTS missions (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    account_id INT NOT NULL,
+    title VARCHAR(100) NOT NULL,
+    target_cents BIGINT NOT NULL,
+    current_cents BIGINT NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+-- O Inventário do Jogador (Itens comprados no Mercado Clandestino)
+CREATE TABLE IF NOT EXISTS inventory (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    account_id INT NOT NULL,
+    item_name VARCHAR(100) NOT NULL,
+    item_description VARCHAR(255),
+    icon_name VARCHAR(50),
+    price_cents BIGINT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+
+-- Corvos Mensageiros (Notificações do Sistema)
+CREATE TABLE IF NOT EXISTS notifications (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    user_id INT NOT NULL,
+    title VARCHAR(100) NOT NULL,
+    message VARCHAR(255) NOT NULL,
+    type VARCHAR(50) DEFAULT 'SYSTEM', -- Pode ser 'TRANSFER_IN', 'SYSTEM', 'ALERT'
+    is_read BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
 -- Índices obrigatórios para performance e regras de negócio
 CREATE INDEX idx_transactions_created_at ON transactions(created_at);
 CREATE INDEX idx_transactions_from_account ON transactions(from_account_id);

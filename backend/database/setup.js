@@ -18,6 +18,8 @@ async function getConnection() {
     });
 }
 
+
+
 async function runMigrations() {
     const conn = await getConnection();
     await conn.query(`CREATE DATABASE IF NOT EXISTS ${process.env.DB_NAME}`);
@@ -57,6 +59,8 @@ async function runSeed() {
     console.log('Email: maria@bank.com | Senha: SenhaForte123!');
     await conn.end();
 }
+
+
 
 const action = process.argv[2];
 if (action === 'migrate') runMigrations().then(() => process.exit(0)).catch(console.error);
